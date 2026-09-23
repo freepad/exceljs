@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const {Writable} = require('stream');
 
 const StreamBuf = verquire('utils/stream-buf');
 const StringBuf = verquire('utils/string-buf');
@@ -58,5 +59,45 @@ describe('StreamBuf', () => {
         'Chunk must be one of type String, Buffer or StringBuf.'
       );
     }
+  });
+
+  it('honours pipe backpressure and resumes on drain', async () => {
+    const stream = new StreamBuf({batch: true, bufSize: 8});
+    const pendingCallbacks = [];
+    const chunks = [];
+    const dest = new Writable({
+      highWaterMark: 1,
+      write(chunk, encoding, callback) {
+        chunks.push(chunk.toString());
+        pendingCallbacks.push(callback);
+      },
+    });
+    stream.pipe(dest);
+
+    // first chunk fills the buffer, second chunk pushes the first into
+    // the pipe, which immediately applies backpressure
+    stream.write('AAAAAAAA');
+    const p2 = stream.write('BBBBBBBB');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(chunks).to.deep.equal(['AAAAAAAA']);
+
+    let resolved = false;
+    p2.then(() => {
+      resolved = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(resolved).to.be.false();
+
+    // releasing the pending pipe write triggers drain and the parked write
+    pendingCallbacks.splice(0).forEach(callback => callback());
+    await p2;
+    expect(resolved).to.be.true();
+
+    // after drain, more data can flow into the pipe (the pipe applies
+    // backpressure again, so release its pending write too)
+    const p4 = stream.write('CCCCCCCC');
+    pendingCallbacks.splice(0).forEach(callback => callback());
+    await p4;
+    expect(chunks).to.deep.equal(['AAAAAAAA', 'BBBBBBBB']);
   });
 });

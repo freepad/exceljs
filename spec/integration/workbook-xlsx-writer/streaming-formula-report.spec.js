@@ -198,4 +198,36 @@ describe('WorkbookWriter streaming formula report', () => {
       });
     });
   });
+
+  it('row.commit() returns a promise that can be awaited for backpressure', async function() {
+    this.timeout(30000);
+
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter({
+      filename: TEST_XLSX_FILE_NAME,
+      useSharedStrings: false,
+      useStyles: false,
+    });
+    const ws = wb.addWorksheet('awaited-commit');
+
+    ws.getCell('A1').value = 1;
+    ws.getCell('B1').value = 2;
+    ws.getCell('C1').value = {formula: 'A1+B1', result: 3};
+    const commitPromise = ws.getRow(1).commit();
+    expect(commitPromise).to.be.an.instanceof(Promise);
+    await commitPromise;
+
+    ws.getCell('A2').value = 4;
+    ws.getCell('B2').value = 5;
+    ws.getCell('C2').value = {formula: 'A2+B2', result: 9};
+    await ws.getRow(2).commit();
+
+    await wb.commit();
+
+    const wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+    const ws2 = wb2.getWorksheet('awaited-commit');
+    expect(ws2.actualRowCount).to.equal(2);
+    expect(ws2.getCell('C1').value.formula).to.equal('A1+B1');
+    expect(ws2.getCell('C2').value.formula).to.equal('A2+B2');
+  });
 });
